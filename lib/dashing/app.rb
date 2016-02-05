@@ -7,6 +7,7 @@ require 'sass'
 require 'json'
 require 'yaml'
 require 'thin'
+require 'cgi'
 
 SCHEDULER = Rufus::Scheduler.new
 
@@ -25,8 +26,8 @@ helpers do
   end
 
   def authenticated?(token)
-    return true unless settings.auth_token
-    token && Rack::Utils.secure_compare(settings.auth_token, token)
+    return true unless settings.token
+    token && Rack::Utils.secure_compare(settings.token, token)
   end
 end
 
@@ -38,7 +39,7 @@ set server: 'thin', connections: [], history_file: 'history.yml'
 set :public_folder, File.join(settings.root, 'public')
 set :views, File.join(settings.root, 'dashboards')
 set :default_dashboard, nil
-set :auth_token, nil
+set :token, nil
 
 if File.exists?(settings.history_file)
   set history: YAML.load_file(settings.history_file)
@@ -94,7 +95,7 @@ post '/dashboards/:id' do
   request.body.rewind
   body = JSON.parse(request.body.read)
   body['dashboard'] ||= params['id']
-  if authenticated?(body.delete("auth_token"))
+  if authenticated?(body.delete("token"))
     send_event(params['id'], body, 'dashboards')
     204 # response without entity body
   else
@@ -105,8 +106,10 @@ end
 
 post '/widgets/:id' do
   request.body.rewind
-  body = JSON.parse(request.body.read)
-  if authenticated?(body.delete("auth_token"))
+  parsed_body = CGI::parse(request.body.read)
+  body = parsed_body.each{ |key,str| parsed_body[key] = str.first }
+
+  if authenticated?(body.delete("token"))
     send_event(params['id'], body)
     204 # response without entity body
   else
@@ -135,7 +138,7 @@ end
 
 def send_event(id, body, target=nil)
   body[:id] = id
-  body[:updatedAt] ||= Time.now.to_i
+  body[:updatedAt] = Time.now.to_i
   event = format_event(body.to_json, target)
   Sinatra::Application.settings.history[id] = event unless target == 'dashboards'
   Sinatra::Application.settings.connections.each { |out| out << event }
